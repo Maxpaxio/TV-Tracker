@@ -1,10 +1,14 @@
+// lib/models/show_models.dart
+
 class Show {
   int tmdbId;
   String title;
   List<Season> seasons;
-  String? posterUrl;
-  String? platformLogoUrl;
+  String? posterUrl; // e.g., TMDB poster (w185)
+  String? platformLogoUrl; // optional legacy single logo (e.g., network logo)
   bool isWatchlisted;
+  List<String>
+  subscriptionLogos; // TMDB "flatrate" provider logo URLs for homepage badges
 
   Show({
     required this.tmdbId,
@@ -13,58 +17,65 @@ class Show {
     this.posterUrl,
     this.platformLogoUrl,
     this.isWatchlisted = false,
-  });
+    List<String>? subscriptionLogos,
+  }) : subscriptionLogos = subscriptionLogos ?? [];
 
-  // Empty placeholder used when no existing show is found
-  factory Show.empty() => Show(tmdbId: -1, title: "", seasons: []);
+  /// Any episode watched across all seasons?
+  bool get anyWatched => seasons.any((s) => s.episodes.any((e) => e.watched));
 
-  /// ✅ All episodes watched?
+  /// All episodes watched (and there is at least one episode in each season)?
   bool get allWatched =>
       seasons.isNotEmpty &&
-      seasons.every((s) => s.episodes.every((e) => e.watched));
+      seasons.every(
+        (s) => s.episodes.isNotEmpty && s.episodes.every((e) => e.watched),
+      );
 
-  /// ✅ Any episode watched?
-  bool get anyWatched =>
-      seasons.any((s) => s.episodes.any((e) => e.watched));
-
-  /// ✅ Progress as fraction [0.0–1.0]
+  /// 0.0–1.0 total watched progress across all episodes.
   double get progress {
-    final totalEpisodes = seasons.fold<int>(
-        0, (sum, season) => sum + season.episodes.length);
-    if (totalEpisodes == 0) return 0.0;
-
-    final watchedEpisodes = seasons.fold<int>(
-        0,
-        (sum, season) =>
-            sum + season.episodes.where((e) => e.watched).length);
-    return watchedEpisodes / totalEpisodes;
+    final total = seasons.fold<int>(0, (sum, s) => sum + s.episodes.length);
+    if (total == 0) return 0.0;
+    final watched = seasons.fold<int>(
+      0,
+      (sum, s) => sum + s.episodes.where((e) => e.watched).length,
+    );
+    return watched / total;
   }
 
-  /// ✅ Serialize to JSON
-  Map<String, dynamic> toJson() {
-    return {
-      'tmdbId': tmdbId,
-      'title': title,
-      'posterUrl': posterUrl,
-      'platformLogoUrl': platformLogoUrl,
-      'isWatchlisted': isWatchlisted,
-      'seasons': seasons.map((s) => s.toJson()).toList(),
-    };
-  }
-
-  /// ✅ Deserialize from JSON
-  factory Show.fromJson(Map<String, dynamic> json) {
+  // in lib/models/show_models.dart (inside class Show)
+  factory Show.empty() {
     return Show(
-      tmdbId: json['tmdbId'] ?? -1,
-      title: json['title'] ?? "",
-      posterUrl: json['posterUrl'],
-      platformLogoUrl: json['platformLogoUrl'],
-      isWatchlisted: json['isWatchlisted'] ?? false,
-      seasons: (json['seasons'] as List<dynamic>? ?? [])
-          .map((s) => Season.fromJson(s as Map<String, dynamic>))
-          .toList(),
+      tmdbId: -1,
+      title: '',
+      posterUrl: null,
+      seasons: const [],
+      isWatchlisted: false,
+      subscriptionLogos: const [],
     );
   }
+
+  factory Show.fromJson(Map<String, dynamic> json) => Show(
+    tmdbId: (json['tmdbId'] as num).toInt(),
+    title: json['title'] as String? ?? "",
+    seasons: (json['seasons'] as List<dynamic>? ?? [])
+        .map((s) => Season.fromJson(s as Map<String, dynamic>))
+        .toList(),
+    posterUrl: json['posterUrl'] as String?,
+    platformLogoUrl: json['platformLogoUrl'] as String?,
+    isWatchlisted: json['isWatchlisted'] as bool? ?? false,
+    subscriptionLogos: (json['subscriptionLogos'] as List<dynamic>? ?? [])
+        .map((e) => e as String)
+        .toList(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'tmdbId': tmdbId,
+    'title': title,
+    'seasons': seasons.map((s) => s.toJson()).toList(),
+    'posterUrl': posterUrl,
+    'platformLogoUrl': platformLogoUrl,
+    'isWatchlisted': isWatchlisted,
+    'subscriptionLogos': subscriptionLogos,
+  };
 }
 
 class Season {
@@ -73,21 +84,17 @@ class Season {
 
   Season({required this.number, required this.episodes});
 
-  Map<String, dynamic> toJson() {
-    return {
-      'number': number,
-      'episodes': episodes.map((e) => e.toJson()).toList(),
-    };
-  }
+  factory Season.fromJson(Map<String, dynamic> json) => Season(
+    number: (json['number'] as num?)?.toInt() ?? 0,
+    episodes: (json['episodes'] as List<dynamic>? ?? [])
+        .map((e) => Episode.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
-  factory Season.fromJson(Map<String, dynamic> json) {
-    return Season(
-      number: json['number'] ?? 0,
-      episodes: (json['episodes'] as List<dynamic>? ?? [])
-          .map((e) => Episode.fromJson(e as Map<String, dynamic>))
-          .toList(),
-    );
-  }
+  Map<String, dynamic> toJson() => {
+    'number': number,
+    'episodes': episodes.map((e) => e.toJson()).toList(),
+  };
 }
 
 class Episode {
@@ -95,25 +102,17 @@ class Episode {
   String title;
   bool watched;
 
-  Episode({
-    required this.number,
-    required this.title,
-    this.watched = false,
-  });
+  Episode({required this.number, required this.title, this.watched = false});
 
-  Map<String, dynamic> toJson() {
-    return {
-      'number': number,
-      'title': title,
-      'watched': watched,
-    };
-  }
+  factory Episode.fromJson(Map<String, dynamic> json) => Episode(
+    number: (json['number'] as num?)?.toInt() ?? 0,
+    title: json['title'] as String? ?? "",
+    watched: json['watched'] as bool? ?? false,
+  );
 
-  factory Episode.fromJson(Map<String, dynamic> json) {
-    return Episode(
-      number: json['number'] ?? 0,
-      title: json['title'] ?? "",
-      watched: json['watched'] ?? false,
-    );
-  }
+  Map<String, dynamic> toJson() => {
+    'number': number,
+    'title': title,
+    'watched': watched,
+  };
 }

@@ -11,5 +11,5 @@ final ThemeData darkTheme = ThemeData(
   useMaterial3: true,
   scaffoldBackgroundColor: const Color(0xFF1E1E1E), // dark gray
   cardColor: const Color(0xFF232323),
-  dialogBackgroundColor: const Color(0xFF232323),
+  dialogTheme: DialogThemeData(backgroundColor: const Color(0xFF232323)),
 );

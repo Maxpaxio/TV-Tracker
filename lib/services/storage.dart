@@ -3,26 +3,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/show_models.dart';
 
 class Storage {
-  static const _key = 'trackedShows';
+  static const String _key = "tracked_shows";
 
-  static Future<List<Show>> load() async {
+  /// Save the current list of shows
+  static Future<void> saveShows(List<Show> shows) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
-    if (raw == null || raw.isEmpty) return [];
-    try {
-      return (jsonDecode(raw) as List<dynamic>)
-          .map((m) => Show.fromJson(m as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    final jsonList = shows.map((s) => s.toJson()).toList();
+    await prefs.setString(_key, jsonEncode(jsonList));
   }
 
-  static Future<void> save(List<Show> shows) async {
+  /// Load the saved list of shows
+  static Future<List<Show>> loadShows() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _key,
-      jsonEncode(shows.map((s) => s.toJson()).toList()),
-    );
+    final jsonString = prefs.getString(_key);
+    if (jsonString == null) return [];
+    final List<dynamic> jsonList = jsonDecode(jsonString);
+    return jsonList.map((j) => Show.fromJson(j)).toList();
   }
 }

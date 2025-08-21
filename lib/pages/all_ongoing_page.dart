@@ -3,93 +3,150 @@ import '../models/show_models.dart';
 import 'show_detail_page.dart';
 
 class AllOngoingPage extends StatelessWidget {
-  final List<Show> ongoingShows;
+  final List<Show> shows;
   final String apiKey;
   final String region;
   final List<Show> trackedShows;
-  final VoidCallback onTrackedShowsChanged;
+  final Future<void> Function() onTrackedShowsChanged;
 
   const AllOngoingPage({
     super.key,
-    required this.ongoingShows,
+    required this.shows,
     required this.apiKey,
     required this.region,
     required this.trackedShows,
     required this.onTrackedShowsChanged,
   });
 
+  void _openDetail(BuildContext context, int tvId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ShowDetailPage(
+          showId: tvId,
+          apiKey: apiKey,
+          region: region,
+          trackedShows: trackedShows,
+          onTrackedShowsChanged: onTrackedShowsChanged,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("All Ongoing Shows")),
-      body: GridView.builder(
-        padding: const EdgeInsets.all(8),
-        itemCount: ongoingShows.length,
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 160,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-          childAspectRatio: 2 / 3,
-        ),
-        itemBuilder: (context, i) {
-          final show = ongoingShows[i];
-          return GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ShowDetailPage(
-                    showId: show.tmdbId,
-                    apiKey: apiKey,
-                    region: region,
-                    trackedShows: trackedShows,
-                    onTrackedShowsChanged: onTrackedShowsChanged,
-                  ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final tileWidth = 110.0; // 80 poster + spacing/title
+          final crossAxisCount = (constraints.maxWidth / tileWidth)
+              .floor()
+              .clamp(3, 10);
+          return GridView.builder(
+            padding: const EdgeInsets.all(12),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 80 / 150, // poster + title + progress
+            ),
+            itemCount: shows.length,
+            itemBuilder: (_, i) {
+              final s = shows[i];
+              return GestureDetector(
+                onTap: () => _openDetail(context, s.tmdbId),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Poster
+                    Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: s.posterUrl != null
+                              ? Image.network(
+                                  s.posterUrl!,
+                                  width: 80,
+                                  height: 120,
+                                  fit: BoxFit.cover,
+                                )
+                              : Container(
+                                  width: 80,
+                                  height: 120,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white10,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(Icons.tv),
+                                ),
+                        ),
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Row(
+                            children: [
+                              if (s.isWatchlisted)
+                                const Icon(
+                                  Icons.bookmark,
+                                  size: 18,
+                                  color: Colors.amber,
+                                ),
+                              if (s.allWatched) ...[
+                                const SizedBox(width: 6),
+                                const Icon(
+                                  Icons.check_circle,
+                                  size: 18,
+                                  color: Colors.greenAccent,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        if (s.subscriptionLogos.isNotEmpty)
+                          Positioned(
+                            left: 6,
+                            bottom: 6,
+                            child: Row(
+                              children: s.subscriptionLogos.take(4).map((logo) {
+                                return Container(
+                                  width: 16,
+                                  height: 16,
+                                  margin: const EdgeInsets.only(right: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.55),
+                                    borderRadius: BorderRadius.circular(3),
+                                    border: Border.all(
+                                      color: Colors.white24,
+                                      width: 0.5,
+                                    ),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Image.network(
+                                    logo,
+                                    fit: BoxFit.contain,
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 6,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(value: s.progress),
+                      ),
+                    ),
+                  ],
                 ),
               );
             },
-            child: Column(
-              children: [
-                Expanded(
-                  child: Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: AspectRatio(
-                          aspectRatio: 2 / 3,
-                          child: Image.network(
-                            show.posterUrl ?? "",
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                                Container(color: Colors.grey.shade700),
-                          ),
-                        ),
-                      ),
-                      if (show.platformLogoUrl != null)
-                        Positioned(
-                          top: 4,
-                          left: 4,
-                          child: Image.network(
-                            show.platformLogoUrl!,
-                            width: 20,
-                            height: 20,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  show.title,
-                  style: const TextStyle(fontSize: 12),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(
-                  height: 4,
-                  child: LinearProgressIndicator(value: show.progress),
-                ),
-              ],
-            ),
           );
         },
       ),

@@ -1,135 +1,76 @@
 import 'package:flutter/material.dart';
 import '../models/show_models.dart';
-import '../pages/show_detail_page.dart';
 
 class AccordionShowTile extends StatelessWidget {
   final Show show;
-  final bool isExpanded;
-  final VoidCallback onExpand;
-  final VoidCallback onChanged;
-  final String apiKey;
-  final String region;
-  final List<Show> trackedShowsRef;
+  final bool expanded;
+  final VoidCallback onTap;
+  final Widget? trailingBadges;
 
   const AccordionShowTile({
     super.key,
     required this.show,
-    required this.isExpanded,
-    required this.onExpand,
-    required this.onChanged,
-    required this.apiKey,
-    required this.region,
-    required this.trackedShowsRef,
+    required this.expanded,
+    required this.onTap,
+    this.trailingBadges,
   });
-
-  void _maybeClearWatchlist() {
-    // If any episode is watched, it should no longer be on the watchlist
-    if (show.anyWatched && show.isWatchlisted) {
-      show.isWatchlisted = false;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        ListTile(
-          leading: GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ShowDetailPage(
-                    showId: show.tmdbId,
-                    apiKey: apiKey,
-                    region: region,
-                    trackedShows: trackedShowsRef,
-                    onTrackedShowsChanged: onChanged,
-                  ),
-                ),
-              );
-            },
-            child: SizedBox(
-              width: 60,
-              height: 90, // 2:3 portrait
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: show.posterUrl != null
-                    ? Image.network(show.posterUrl!, fit: BoxFit.cover)
-                    : Container(color: Colors.grey.shade700),
-              ),
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: show.posterUrl != null
+                ? Image.network(
+                    show.posterUrl!,
+                    width: 60,
+                    height: 90,
+                    fit: BoxFit.cover,
+                  )
+                : const Icon(Icons.tv),
+            title: Text(
+              show.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
+            trailing: trailingBadges,
+            onTap: onTap,
           ),
-          title: Row(
-            children: [
-              Flexible(
-                child: Text(
-                  show.title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (show.platformLogoUrl != null) ...[
-                const SizedBox(width: 6),
-                Image.network(show.platformLogoUrl!, width: 16, height: 16),
-              ],
-            ],
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LinearProgressIndicator(
-                value: show.progress,
-                minHeight: 4,
-              ),
-              const SizedBox(height: 3),
-              Text("${(show.progress * 100).toStringAsFixed(0)}%",
-                  style: const TextStyle(fontSize: 12)),
-            ],
-          ),
-          onTap: onExpand,
-        ),
-        if (isExpanded)
-          Column(
-            children: show.seasons.map((season) {
-              final allWatched = season.episodes.every((e) => e.watched);
-              return ExpansionTile(
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-                title: Row(
-                  children: [
-                    Expanded(child: Text("Season ${season.number}")),
-                    Checkbox(
-                      value: allWatched,
-                      onChanged: (val) {
-                        // Toggle entire season
-                        for (final ep in season.episodes) {
-                          ep.watched = val ?? false;
-                        }
-                        _maybeClearWatchlist();
-                        onChanged();
-                      },
-                    ),
-                  ],
-                ),
-                children: season.episodes.map((ep) {
-                  return CheckboxListTile(
-                    dense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: Text("Ep ${ep.number}. ${ep.title}",
-                        overflow: TextOverflow.ellipsis),
-                    value: ep.watched,
-                    onChanged: (val) {
-                      ep.watched = val ?? false;
-                      _maybeClearWatchlist();
-                      onChanged();
-                    },
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: show.seasons.map((s) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Season ${s.number}",
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      ...s.episodes.map(
+                        (e) => Row(
+                          children: [
+                            Checkbox(value: e.watched, onChanged: (_) {}),
+                            Expanded(
+                              child: Text(
+                                "Ep ${e.number}: ${e.title}",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   );
                 }).toList(),
-              );
-            }).toList(),
-          ),
-      ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

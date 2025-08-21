@@ -1,6 +1,6 @@
 name: tv_tracker
 description: "A new Flutter project."
-publish_to: 'none' # Remove this line if you want to publish to pub.dev
+publish_to: 'none'
 
 version: 1.0.0+1
 
@@ -10,28 +10,18 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
-  # Networking
   http: ^1.1.0
-
-  # Persistent storage (save watched shows)
-  shared_preferences: ^2.2.3
-
-  # For SVG logos (streaming platforms, optional)
   flutter_svg: ^2.0.7
-
-  # iOS-style icons
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.2.2
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^6.0.0
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
-
   assets:
-    # Add your SVG or image assets here if needed, e.g.:
-    # - assets/logos/netflix.svg
-    # - assets/logos/hbo.svg
+    - assets/logos/
