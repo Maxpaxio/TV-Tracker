@@ -1,80 +1,53 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'models/show_models.dart';
+import 'services/storage.dart';
 import 'pages/home_page.dart';
-import 'theme.dart';
-import 'dart:convert';
 
-void main() {
-  runApp(const TvTrackerApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final trackedShows = await Storage.loadShows();
+  runApp(TvTrackerApp(trackedShows: trackedShows));
 }
 
 class TvTrackerApp extends StatefulWidget {
-  const TvTrackerApp({super.key});
+  final List<Show> trackedShows;
+
+  const TvTrackerApp({super.key, required this.trackedShows});
+
   @override
   State<TvTrackerApp> createState() => _TvTrackerAppState();
 }
 
 class _TvTrackerAppState extends State<TvTrackerApp> {
-  final List<Show> trackedShows = [];
-  int? expandedShowId;
-  bool _loaded = false;
+  late List<Show> trackedShows;
 
   @override
   void initState() {
     super.initState();
-    _loadTrackedShows();
+    trackedShows = widget.trackedShows;
   }
 
-  Future<void> _loadTrackedShows() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('trackedShows');
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        final list = (jsonDecode(raw) as List<dynamic>)
-            .map((m) => Show.fromJson(m as Map<String, dynamic>))
-            .toList();
-        trackedShows
-          ..clear()
-          ..addAll(list);
-      } catch (_) {}
-    }
-    setState(() => _loaded = true);
-  }
-
-  Future<void> _saveTrackedShows() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonList = trackedShows.map((s) => s.toJson()).toList();
-    await prefs.setString('trackedShows', jsonEncode(jsonList));
-  }
-
-  void _onTrackedShowsChanged() {
+  Future<void> saveShows() async {
+    await Storage.saveShows(trackedShows);
     setState(() {});
-    _saveTrackedShows();
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'TV Tracker',
-      theme: lightTheme,
-      darkTheme: darkTheme,        // dark gray theme
-      themeMode: ThemeMode.dark,   // force dark mode (change to system if you prefer)
-      home: _loaded
-          ? HomePage(
-              trackedShows: trackedShows,
-              expandedShowId: expandedShowId,
-              onExpandedChanged: (id) {
-                setState(() {
-                  expandedShowId = (expandedShowId == id) ? null : id;
-                });
-                _saveTrackedShows();
-              },
-              onTrackedShowsChanged: _onTrackedShowsChanged,
-            )
-          : const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            ),
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF1C1C1C),
+        cardColor: const Color(0xFF2A2A2A),
+        appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF2A2A2A)),
+      ),
+      home: HomePage(
+        apiKey: "6f8c0bbf88560ad26d47fcfa5f12cdc4", // TMDB key
+        region: "SE", // region code
+        trackedShows: trackedShows,
+        saveShows: saveShows,
+      ),
     );
   }
 }
