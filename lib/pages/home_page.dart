@@ -1,4 +1,3 @@
-// lib/pages/home_page.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -6,7 +5,7 @@ import '../models/show_models.dart';
 import '../services/tmdb_api.dart';
 import 'show_detail_page.dart';
 import 'all_grid_page.dart';
-import '../widgets/search_overlay.dart'; // <-- overlay
+import '../widgets/search_overlay.dart';
 
 class HomePage extends StatefulWidget {
   final String apiKey;
@@ -29,15 +28,41 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   late List<Show> trackedShows;
 
-  // Search
+  // Search state
   final TextEditingController _searchCtrl = TextEditingController();
+  final GlobalKey _searchKey = GlobalKey();
+  final GlobalKey _stackKey = GlobalKey();
   List<dynamic> _searchResults = [];
   bool _searchLoading = false;
+  double? _overlayTopLocal;
 
   @override
   void initState() {
     super.initState();
     trackedShows = widget.trackedShows;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _recomputeOverlayTop());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _recomputeOverlayTop());
+  }
+
+  void _recomputeOverlayTop() {
+    final searchBox =
+        _searchKey.currentContext?.findRenderObject() as RenderBox?;
+    final stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (searchBox == null || stackBox == null) return;
+
+    final searchTopGlobal = searchBox.localToGlobal(Offset.zero);
+    final searchBottomGlobal = Offset(
+      searchTopGlobal.dx,
+      searchTopGlobal.dy + searchBox.size.height,
+    );
+
+    final bottomLocal = stackBox.globalToLocal(searchBottomGlobal);
+    setState(() => _overlayTopLocal = bottomLocal.dy);
   }
 
   Future<void> _persist() async {
@@ -46,11 +71,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _doSearch(String q) async {
+    if (q.trim().isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _searchLoading = false;
+      });
+      return;
+    }
     try {
-      if (q.trim().isEmpty) {
-        setState(() => _searchResults = []);
-        return;
-      }
       setState(() => _searchLoading = true);
       final api = TmdbApi(widget.apiKey, region: widget.region);
       final res = await api.searchShows(q);
@@ -59,19 +87,14 @@ class _HomePageState extends State<HomePage> {
         _searchResults = res;
         _searchLoading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _searchLoading = false);
-      if (kDebugMode) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Search failed')));
-      }
+      if (kDebugMode) debugPrint('Search failed: $e');
     }
   }
 
   void _openDetailById(int tvId) {
-    // IMPORTANT: do NOT clear search state here; we want it to still be there when you pop back.
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ShowDetailPage(
@@ -85,117 +108,209 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openDetailForShow(Show s) => _openDetailById(s.tmdbId);
+  int _indexOfShow(int tmdbId) =>
+      trackedShows.indexWhere((s) => s.tmdbId == tmdbId);
 
-  // Quick add to watchlist straight from search overlay
+  void _replaceShowAt(int idx, Show newShow) {
+    trackedShows = List<Show>.from(trackedShows)..[idx] = newShow;
+  }
+
+  void _upsertShow(Show newShow) {
+    final idx = _indexOfShow(newShow.tmdbId);
+    if (idx >= 0) {
+      _replaceShowAt(idx, newShow);
+    } else {
+      trackedShows = List<Show>.from(trackedShows)..add(newShow);
+    }
+  }
+
+  Show _ensureShowInLibrary({
+    required int tvId,
+    required String title,
+    required String? posterPath,
+  }) {
+    final idx = _indexOfShow(tvId);
+    if (idx >= 0) return trackedShows[idx];
+
+    final posterUrl = (posterPath != null && posterPath.isNotEmpty)
+        ? 'https://image.tmdb.org/t/p/w342$posterPath'
+        : null;
+
+    final created = Show(
+      tmdbId: tvId,
+      title: title,
+      posterUrl: posterUrl,
+      seasons: const [],
+      isWatchlisted: false,
+      subscriptionLogos: const [],
+    );
+    _upsertShow(created);
+    return created;
+  }
+
+  Future<List<String>> _fetchProviderLogos(int tvId) async {
+    try {
+      final api = TmdbApi(widget.apiKey, region: widget.region);
+      return await api.getWatchProvidersLogos(tvId);
+    } catch (e) {
+      if (kDebugMode) debugPrint('Provider logos fetch failed: $e');
+      return const [];
+    }
+  }
+
+  // ===== Quick actions (exclusive) ===========================================
+
   Future<void> _quickAddToWatchlistFromSearch(
     int tvId,
     String title,
     String? posterPath,
   ) async {
-    // find existing
-    final idx = trackedShows.indexWhere((s) => s.tmdbId == tvId);
-    if (idx >= 0) {
-      final s = trackedShows[idx];
-      if (!s.isWatchlisted) {
-        s.isWatchlisted = true;
-      }
-    } else {
-      // create a minimal Show; seasons empty is fine for watchlist
-      final posterUrl = (posterPath != null && posterPath.isNotEmpty)
-          ? 'https://image.tmdb.org/t/p/w342$posterPath'
-          : null;
+    final existing = _ensureShowInLibrary(
+      tvId: tvId,
+      title: title,
+      posterPath: posterPath,
+    );
+    final idx = _indexOfShow(tvId);
 
-      trackedShows.add(
-        Show(
-          tmdbId: tvId,
-          title: title,
-          posterUrl: posterUrl,
-          seasons: const [],
-          isWatchlisted: true,
-          subscriptionLogos: const [],
-        ),
-      );
+    // Clear all episodes when moving to Watchlist
+    final clearedSeasons = existing.seasons
+        .map(
+          (s) => s.copyWith(
+            episodes: s.episodes
+                .map((e) => e.copyWith(watched: false))
+                .toList(),
+          ),
+        )
+        .toList();
+
+    final logos = await _fetchProviderLogos(tvId);
+
+    final updated = existing.copyWith(
+      isWatchlisted: true,
+      seasons: clearedSeasons,
+      subscriptionLogos: logos.isNotEmpty ? logos : existing.subscriptionLogos,
+    );
+
+    if (idx >= 0) {
+      _replaceShowAt(idx, updated);
+    } else {
+      _upsertShow(updated);
     }
     await _persist();
   }
 
+  Future<void> _quickMarkCompletedFromSearch(
+    int tvId,
+    String title,
+    String? posterPath,
+  ) async {
+    final existing = _ensureShowInLibrary(
+      tvId: tvId,
+      title: title,
+      posterPath: posterPath,
+    );
+    final idx = _indexOfShow(tvId);
+
+    List<Season> newSeasons;
+    if (existing.seasons.isEmpty) {
+      newSeasons = [
+        Season(
+          number: 1,
+          episodes: [Episode(number: 1, title: 'Episode 1', watched: true)],
+        ),
+      ];
+    } else {
+      newSeasons = existing.seasons
+          .map(
+            (s) => s.copyWith(
+              episodes: s.episodes
+                  .map((e) => e.copyWith(watched: true))
+                  .toList(),
+            ),
+          )
+          .toList();
+    }
+
+    final logos = await _fetchProviderLogos(tvId);
+
+    final updated = existing.copyWith(
+      isWatchlisted: false,
+      seasons: newSeasons,
+      subscriptionLogos: logos.isNotEmpty ? logos : existing.subscriptionLogos,
+    );
+
+    if (idx >= 0) {
+      _replaceShowAt(idx, updated);
+    } else {
+      _upsertShow(updated);
+    }
+    await _persist();
+  }
+
+  Future<void> _quickMoveToWatchlistFromSearch(
+    int tvId,
+    String title,
+    String? posterPath,
+  ) async {
+    await _quickAddToWatchlistFromSearch(tvId, title, posterPath);
+  }
+
+  Future<void> _quickRemoveFromLibrary(int tvId) async {
+    trackedShows = List<Show>.from(trackedShows)
+      ..removeWhere((s) => s.tmdbId == tvId);
+    await _persist();
+  }
+
+  // ==========================================================================
+
   @override
   Widget build(BuildContext context) {
-    final ongoing = trackedShows.where((s) {
-      try {
-        return s.anyWatched && !s.allWatched;
-      } catch (_) {
-        return false;
-      }
-    }).toList();
-
-    final completed = trackedShows.where((s) {
-      try {
-        return s.allWatched;
-      } catch (_) {
-        return false;
-      }
-    }).toList();
-
-    final watchlist = trackedShows.where((s) {
-      try {
-        return s.isWatchlisted;
-      } catch (_) {
-        return false;
-      }
-    }).toList();
+    // Exclusive buckets
+    final watchlist = trackedShows.where((s) => s.isWatchlisted).toList();
+    final completed = trackedShows
+        .where((s) => !s.isWatchlisted && s.allWatched)
+        .toList();
+    final ongoing = trackedShows
+        .where((s) => !s.isWatchlisted && s.anyWatched && !s.allWatched)
+        .toList();
 
     final body = SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 🔍 Search bar (results overlay; does not push sections)
-          TextField(
-            controller: _searchCtrl,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: 'Search TV shows…',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchCtrl.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear',
-                      icon: const Icon(Icons.close),
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        setState(() => _searchResults = []);
-                      },
-                    ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
+          // Search
+          Container(
+            key: _searchKey,
+            child: TextField(
+              controller: _searchCtrl,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Search TV shows…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchCtrl.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear',
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() {
+                            _searchResults = [];
+                            _searchLoading = false;
+                          });
+                        },
+                      ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
+              onChanged: (v) => _doSearch(v),
+              onSubmitted: _doSearch,
             ),
-            onChanged: (v) {
-              setState(() {}); // toggle clear button
-              _doSearch(v);
-            },
-            onSubmitted: _doSearch,
           ),
-          if (_searchLoading)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: LinearProgressIndicator(minHeight: 2),
-            ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
 
-          // 🔧 Tiny debug counters
-          if (kDebugMode)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                'tracked=${trackedShows.length} • ongoing=${ongoing.length} • completed=${completed.length} • watchlist=${watchlist.length}',
-                style: const TextStyle(fontSize: 12, color: Colors.white70),
-              ),
-            ),
-
-          // ===== Ongoing (horizontal row with progress bar; NO badges) =====
           SectionHeader(
             title: 'Ongoing (${ongoing.length})',
             onTap: () => _openAllGrid(
@@ -214,14 +329,13 @@ class _HomePageState extends State<HomePage> {
           if (ongoing.isNotEmpty)
             HorizontalPosterRow(
               shows: ongoing.take(12).toList(),
-              onTapPoster: _openDetailForShow,
+              onTapPoster: (s) => _openDetailById(s.tmdbId),
               showProgress: true,
               showBadges: false,
             ),
 
           const SizedBox(height: 16),
 
-          // ===== Completed =====
           SectionHeader(
             title: 'Completed (${completed.length})',
             onTap: () =>
@@ -236,12 +350,11 @@ class _HomePageState extends State<HomePage> {
           if (completed.isNotEmpty)
             HorizontalPosterRow(
               shows: completed.take(12).toList(),
-              onTapPoster: _openDetailForShow,
+              onTapPoster: (s) => _openDetailById(s.tmdbId),
             ),
 
           const SizedBox(height: 16),
 
-          // ===== Watchlist =====
           SectionHeader(
             title: 'Watchlist (${watchlist.length})',
             onTap: () =>
@@ -254,46 +367,38 @@ class _HomePageState extends State<HomePage> {
           if (watchlist.isNotEmpty)
             HorizontalPosterRow(
               shows: watchlist.take(12).toList(),
-              onTapPoster: _openDetailForShow,
+              onTapPoster: (s) => _openDetailById(s.tmdbId),
             ),
         ],
       ),
     );
 
     return Scaffold(
-      appBar: AppBar(
-        title: GestureDetector(
-          onTap: () {
-            FocusScope.of(context).unfocus();
-            // Keep results when tapping title? Up to you; I won't clear them here.
-          },
-          child: const Text('TV Tracker'),
-        ),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('TV Tracker'), centerTitle: true),
       body: SafeArea(
         child: Stack(
+          key: _stackKey,
           children: [
             body,
-
-            // 🔎 Overlapping search overlay (stays in memory during navigation)
-            if (_searchResults.isNotEmpty)
+            if (_searchLoading && _overlayTopLocal != null)
+              Positioned(
+                left: 12,
+                right: 12,
+                top: _overlayTopLocal! + 2,
+                child: const LinearProgressIndicator(minHeight: 2),
+              ),
+            if (_searchResults.isNotEmpty && _overlayTopLocal != null)
               SearchOverlay(
                 results: _searchResults,
                 tracked: trackedShows,
-                onTapItem: (tvId) {
-                  // Do NOT clear here – we want the overlay/results to be remembered.
-                  _openDetailById(tvId);
-                },
-                onQuickWatchlist: (tvId, title, posterPath) async {
-                  await _quickAddToWatchlistFromSearch(tvId, title, posterPath);
-                },
-                onClose: () {
-                  setState(() {
-                    _searchResults = [];
-                    _searchCtrl.clear();
-                  });
-                },
+                onTapItem: (tvId) => _openDetailById(tvId),
+                onQuickWatchlist: _quickAddToWatchlistFromSearch,
+                onQuickComplete: _quickMarkCompletedFromSearch,
+                onQuickMoveToWatchlist: _quickMoveToWatchlistFromSearch,
+                onQuickRemove: _quickRemoveFromLibrary,
+                onClose: () => setState(() => _searchResults = []),
+                overlayTop: _overlayTopLocal!,
+                overlapPx: 0,
               ),
           ],
         ),
@@ -334,10 +439,6 @@ class EmptyHint extends StatelessWidget {
   }
 }
 
-/// Single-row, horizontally scrollable posters (80x120)
-/// - Top-left: subscription logos (2×2 @ 18px)
-/// - Top-right: badges (bookmark, check) — can be disabled
-/// - Optional progress bar below title when [showProgress] is true
 class HorizontalPosterRow extends StatelessWidget {
   final List<Show> shows;
   final void Function(Show show) onTapPoster;
@@ -357,7 +458,7 @@ class HorizontalPosterRow extends StatelessWidget {
     final posterH = 120.0;
     final titleH = 18.0;
     final gap = 6.0;
-    final progressH = showProgress ? (6.0 + 6.0) : 0.0; // bar + gap
+    final progressH = showProgress ? (6.0 + 6.0) : 0.0;
     final totalHeight = posterH + gap + titleH + progressH + 8.0;
 
     return SizedBox(
@@ -376,7 +477,6 @@ class HorizontalPosterRow extends StatelessWidget {
               children: [
                 Stack(
                   children: [
-                    // Poster
                     GestureDetector(
                       onTap: () => onTapPoster(s),
                       child: ClipRRect(
@@ -410,14 +510,12 @@ class HorizontalPosterRow extends StatelessWidget {
                               ),
                       ),
                     ),
-
-                    // TOP-LEFT: subscription logos (2×2 grid, 18px)
                     if (s.subscriptionLogos.isNotEmpty)
                       Positioned(
                         left: 4,
                         top: 4,
                         child: SizedBox(
-                          width: 40, // 18 + 2 + 18 + 2
+                          width: 40,
                           height: 40,
                           child: GridView.count(
                             crossAxisCount: 2,
@@ -431,7 +529,7 @@ class HorizontalPosterRow extends StatelessWidget {
                                   color: Colors.black.withValues(alpha: 0.55),
                                   borderRadius: BorderRadius.circular(4),
                                   border: Border.all(
-                                    color: Colors.white24,
+                                    color: Colors.white.withValues(alpha: 0.24),
                                     width: 0.5,
                                   ),
                                 ),
@@ -447,8 +545,6 @@ class HorizontalPosterRow extends StatelessWidget {
                           ),
                         ),
                       ),
-
-                    // TOP-RIGHT: badges (hidden for Ongoing)
                     if (showBadges)
                       Positioned(
                         top: 6,
@@ -476,8 +572,6 @@ class HorizontalPosterRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-
-                // Progress bar (ongoing only)
                 if (showProgress && s.anyWatched && !s.allWatched) ...[
                   const SizedBox(height: 6),
                   SizedBox(
@@ -497,7 +591,6 @@ class HorizontalPosterRow extends StatelessWidget {
   }
 }
 
-/// Simple section header (title + chevron)
 class SectionHeader extends StatelessWidget {
   final String title;
   final VoidCallback onTap;

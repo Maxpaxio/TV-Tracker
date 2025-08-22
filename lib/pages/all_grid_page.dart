@@ -146,8 +146,9 @@ class _AllGridPageState extends State<AllGridPage> {
     if (u.contains('hulu')) return 'Hulu';
     if (u.contains('starz')) return 'Starz';
     if (u.contains('showtime')) return 'Showtime';
-    if (u.contains('hbomax') || u.contains('hbo') || u.contains('/max'))
+    if (u.contains('hbomax') || u.contains('hbo') || u.contains('/max')) {
       return 'Max';
+    }
 
     // Unknown → don’t surface a filter for it
     return '';
