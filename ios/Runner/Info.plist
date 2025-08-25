@@ -47,3 +47,18 @@
 	</array>
 </dict>
 </plist>
+<key>LSApplicationQueriesSchemes</key>
+<array>
+  <string>netflix</string>
+  <string>disneyplus</string>
+  <string>hbomax</string>
+  <string>hulu</string>
+  <string>primevideo</string>
+  <string>tv</string>
+  <string>paramountplus</string>
+  <string>peacock</string>
+  <string>viaplay</string>
+  <string>svtplay</string>
+  <string>cmore</string>
+  <string>dplusapp</string>
+</array>

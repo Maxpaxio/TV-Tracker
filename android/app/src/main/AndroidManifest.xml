@@ -43,3 +43,17 @@
         </intent>
     </queries>
 </manifest>
+<queries>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="netflix"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="disneyplus"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="hbomax"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="hulu"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="primevideo"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="tv"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="paramountplus"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="peacock"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="viaplay"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="svtplay"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="cmore"/></intent>
+  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="dplusapp"/></intent>
+</queries>

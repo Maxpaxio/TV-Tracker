@@ -1,5 +1,67 @@
 // lib/models/show_models.dart
+
 import 'dart:convert';
+
+/// Minimal streaming provider model used in details & deep linking.
+class WatchProvider {
+  final int? id; // TMDB provider_id if you store it
+  final String name; // e.g., "Netflix"
+  final String logoUrl; // full https url to logo image
+  final String?
+  webUrl; // optional direct web url to provider/show (if you ever add it)
+
+  const WatchProvider({
+    this.id,
+    required this.name,
+    required this.logoUrl,
+    this.webUrl,
+  });
+
+  WatchProvider copyWith({
+    int? id,
+    String? name,
+    String? logoUrl,
+    String? webUrl,
+  }) {
+    return WatchProvider(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      logoUrl: logoUrl ?? this.logoUrl,
+      webUrl: webUrl ?? this.webUrl,
+    );
+  }
+
+  factory WatchProvider.fromJson(Map<String, dynamic> json) {
+    return WatchProvider(
+      id: json['id'] as int?,
+      name: json['name'] as String? ?? '',
+      logoUrl: json['logoUrl'] as String? ?? '',
+      webUrl: json['webUrl'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'logoUrl': logoUrl,
+    'webUrl': webUrl,
+  };
+
+  @override
+  String toString() => 'WatchProvider($name)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WatchProvider &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          logoUrl == other.logoUrl &&
+          id == other.id;
+
+  @override
+  int get hashCode => Object.hash(id, name, logoUrl);
+}
 
 class Episode {
   final int number;

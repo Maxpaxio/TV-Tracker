@@ -1,15 +1,18 @@
+// lib/pages/show_detail_page.dart
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:palette_generator/palette_generator.dart';
 
-import '../models/show_models.dart';
-import '../services/tmdb_api.dart';
+import '../models/show_models.dart' as models; // alias your models
+import '../services/tmdb_api.dart' as tmdb; // alias TMDB service
+import '../services/deeplink.dart';
 import 'show_meta_page.dart';
 
 class ShowDetailPage extends StatefulWidget {
   final int showId;
   final String apiKey;
   final String region;
-  final List<Show> trackedShows;
+  final List<models.Show> trackedShows;
   final Future<void> Function() onTrackedShowsChanged;
 
   const ShowDetailPage({
@@ -26,27 +29,39 @@ class ShowDetailPage extends StatefulWidget {
 }
 
 class _ShowDetailPageState extends State<ShowDetailPage> {
-  late TmdbApi api;
-  Show? show;
+  late tmdb.TmdbApi api;
+
+  models.Show? show;
   Map<String, dynamic>? detail;
-  bool loading = true;
+
+  bool loadingCore = true; // title/poster/providers
+  bool loadingSeasons = true; // seasons
   String? overview;
-
-  // Providers (region specific)
-  List<WatchProvider> subs = const [];
-  List<WatchProvider> rents = const [];
-  List<WatchProvider> buys = const [];
-  String? regionProviderPage; // TMDB/JustWatch page for this title in region
-
   String? backdropUrl;
+  Color _edgeColor = const Color(0xFF111113);
+
+  // region-scoped providers (use your app model)
+  List<models.WatchProvider> subs = const [];
+  List<models.WatchProvider> rents = const [];
+  List<models.WatchProvider> buys = const [];
+  String? regionProviderPage;
+
+  // layout
+  static const double _posterW = 150.0;
+  static const double _posterH = 220.0;
+  static const double _hPad = 16.0;
+  static const double _bannerH = 260.0;
+  static const double _fadeIntoArtwork = 110.0;
 
   @override
   void initState() {
     super.initState();
-    api = TmdbApi(widget.apiKey, region: widget.region);
-    _bootstrap();
+    api = tmdb.TmdbApi(widget.apiKey, region: widget.region);
+    _loadCoreFirst();
+    _prewarmExtrasLater();
   }
 
+  // -------- bootstrap / data --------
   void _syncIntoParent() {
     if (show == null) return;
     final idx = widget.trackedShows.indexWhere((s) => s.tmdbId == show!.tmdbId);
@@ -57,11 +72,11 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
     }
   }
 
-  Future<void> _bootstrap() async {
+  Future<void> _loadCoreFirst() async {
     try {
       show = widget.trackedShows.firstWhere(
         (s) => s.tmdbId == widget.showId,
-        orElse: () => Show(
+        orElse: () => models.Show(
           tmdbId: widget.showId,
           title: 'Loading…',
           posterUrl: null,
@@ -71,9 +86,19 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
         ),
       );
 
-      final d = await api.getShowDetail(widget.showId);
+      final results = await Future.wait([
+        api.getShowDetail(widget.showId),
+        api.getWatchProvidersRaw(widget.showId),
+      ]);
+
+      final d = results[0] as Map<String, dynamic>;
+      final providersRaw = results[1] as Map<String, dynamic>;
+
       final title = (d['name'] as String?)?.trim() ?? show!.title;
-      final posterSmall = TmdbApi.imageUrl('w342', d['poster_path'] as String?);
+      final posterSmall = tmdb.TmdbApi.imageUrl(
+        'w342',
+        d['poster_path'] as String?,
+      );
       final desc = (d['overview'] as String?)?.trim();
       overview = (desc == null || desc.isEmpty)
           ? 'No description available.'
@@ -86,39 +111,123 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
       if (show!.title == 'Loading…') {
         show = show!.copyWith(title: title);
       }
-      if (show!.seasons.isEmpty) {
-        final seasons = await api.buildSeasonsWithEpisodeTitles(widget.showId);
-        show = show!.copyWith(seasons: seasons);
-      }
 
-      // region providers
-      final providersRaw = await api.getWatchProvidersRaw(widget.showId);
+      // Providers for region — map TMDB providers to your app model
       regionProviderPage = api.extractRegionProviderPageLink(
         providersRaw,
         widget.region,
       );
-      subs = api.extractFlatrateProviders(providersRaw, widget.region);
-      rents = api.extractRentProviders(providersRaw, widget.region);
-      buys = api.extractBuyProviders(providersRaw, widget.region);
 
-      // keep small logo list for home badges (subs only)
-      final subLogos = subs.map((e) => e.logoUrl).toList();
-      final fallback = subLogos.isEmpty
-          ? api.providerLogoFromDetail(d)
-          : subLogos;
-      show = show!.copyWith(subscriptionLogos: fallback);
+      final subsRaw = api.extractFlatrateProviders(
+        providersRaw,
+        widget.region,
+      ); // List<tmdb.WatchProvider>
+      final rentsRaw = api.extractRentProviders(
+        providersRaw,
+        widget.region,
+      ); // List<tmdb.WatchProvider>
+      final buysRaw = api.extractBuyProviders(
+        providersRaw,
+        widget.region,
+      ); // List<tmdb.WatchProvider>
+
+      // tmdb.WatchProvider likely has: id, name, logoUrl (no webUrl). Don’t reference webUrl here.
+      subs = subsRaw
+          .map(
+            (p) => models.WatchProvider(
+              id: p.id,
+              name: p.name,
+              logoUrl: p.logoUrl,
+            ),
+          )
+          .toList();
+      rents = rentsRaw
+          .map(
+            (p) => models.WatchProvider(
+              id: p.id,
+              name: p.name,
+              logoUrl: p.logoUrl,
+            ),
+          )
+          .toList();
+      buys = buysRaw
+          .map(
+            (p) => models.WatchProvider(
+              id: p.id,
+              name: p.name,
+              logoUrl: p.logoUrl,
+            ),
+          )
+          .toList();
+
+      // Small set of subscription logos on the model (used on home badges)
+      final subLogos = subs.map((e) => e.logoUrl).toList(); // List<String>
+
+      // providerLogoFromDetail may return String OR List<String> (depending on your tmdb_api)
+      List<String> fallback = const [];
+      final dynamic pl = api.providerLogoFromDetail(d);
+      if (pl is String) {
+        fallback = [pl];
+      } else if (pl is List) {
+        fallback = pl.map((e) => e.toString()).toList();
+      }
+
+      final logosToUse = subLogos.isNotEmpty ? subLogos : fallback;
+      show = show!.copyWith(subscriptionLogos: logosToUse);
 
       detail = d;
       _syncIntoParent();
       await widget.onTrackedShowsChanged();
-      if (mounted) setState(() => loading = false);
+
+      if (!mounted) return;
+      setState(() => loadingCore = false);
     } catch (_) {
       if (!mounted) return;
-      setState(() {
-        loading = false;
-        overview = 'Failed to load details.';
-      });
+      setState(() => loadingCore = false);
     }
+  }
+
+  Future<void> _prewarmExtrasLater() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // seasons
+      if (show != null && show!.seasons.isEmpty) {
+        try {
+          final seasons = await api.buildSeasonsWithEpisodeTitles(
+            widget.showId,
+          );
+          show = show!.copyWith(seasons: seasons);
+          _syncIntoParent();
+          await widget.onTrackedShowsChanged();
+        } catch (_) {}
+      }
+      if (mounted) setState(() => loadingSeasons = false);
+
+      // palette color
+      final url = backdropUrl;
+      if (url != null && url.isNotEmpty) {
+        try {
+          final pal = await PaletteGenerator.fromImageProvider(
+            NetworkImage(url),
+            maximumColorCount: 12,
+          );
+          final c =
+              pal.dominantColor?.color ??
+              pal.mutedColor?.color ??
+              pal.darkMutedColor?.color;
+          if (c != null && mounted) setState(() => _edgeColor = c);
+        } catch (_) {}
+      }
+    });
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      loadingCore = true;
+      loadingSeasons = true;
+    });
+    if (show != null) show = show!.copyWith(seasons: const []);
+    await _loadCoreFirst();
+    await _prewarmExtrasLater();
   }
 
   Future<void> _persist() async {
@@ -127,8 +236,8 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
     if (mounted) setState(() {});
   }
 
-  // ---- Exclusive states helpers ----
-  List<Season> _allEpisodesWatched(bool watched) {
+  // -------- state transitions (exclusive categories) --------
+  List<models.Season> _allEpisodesWatched(bool watched) {
     return show!.seasons
         .map(
           (s) => s.copyWith(
@@ -141,8 +250,9 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
   }
 
   void _toggleWatchlist() async {
-    final turningOn = !(show?.isWatchlisted ?? false);
-    if (turningOn) {
+    Feedback.forTap(context);
+    final turnOn = !(show?.isWatchlisted ?? false);
+    if (turnOn) {
       final cleared = _allEpisodesWatched(false);
       show = show!.copyWith(isWatchlisted: true, seasons: cleared);
     } else {
@@ -152,13 +262,15 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
   }
 
   void _toggleShowWatched() async {
+    Feedback.forTap(context);
     final all = show!.allWatched;
-    final updatedSeasons = _allEpisodesWatched(!all);
-    show = show!.copyWith(seasons: updatedSeasons, isWatchlisted: false);
+    final updated = _allEpisodesWatched(!all);
+    show = show!.copyWith(seasons: updated, isWatchlisted: false);
     await _persist();
   }
 
   void _toggleSeason(int seasonNumber, bool markWatched) async {
+    Feedback.forTap(context);
     final updated = show!.seasons.map((s) {
       if (s.number != seasonNumber) return s;
       return s.copyWith(
@@ -172,6 +284,7 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
   }
 
   void _toggleEpisode(int seasonNumber, int episodeNumber, bool watched) async {
+    Feedback.forTap(context);
     final updated = show!.seasons.map((s) {
       if (s.number != seasonNumber) return s;
       return s.copyWith(
@@ -187,163 +300,183 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
     await _persist();
   }
 
-  // ---- Launch helpers ----
-
-  Future<void> _openProvider(WatchProvider p) async {
-    // 1) Try a native app scheme (best effort). This does NOT deep-link to the exact title,
-    //     because TMDB doesn’t expose per-provider content IDs.
-    final scheme = _schemeForProvider(p);
-    if (scheme != null) {
-      final uri = Uri.parse(scheme);
-      if (await canLaunchUrl(uri)) {
-        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (ok) return;
-      }
-    }
-
-    // 2) Try a provider website (home). Again, not title-specific.
-    final web = _webForProvider(p);
-    if (web != null) {
-      final uri = Uri.parse(web);
-      if (await canLaunchUrl(uri)) {
-        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (ok) return;
-      }
-    }
-
-    // 3) Fallback: region-specific “Where to Watch” page for this title (TMDB/JustWatch)
-    if (regionProviderPage != null) {
-      final uri = Uri.parse(regionProviderPage!);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+  // -------- deep links --------
+  Future<void> _openProvider(models.WatchProvider provider) async {
+    await DeepLinker.open(
+      provider: provider,
+      showTitle: show?.title ?? '',
+      regionFallbackUrl: regionProviderPage,
+    );
   }
 
-  String? _schemeForProvider(WatchProvider p) {
-    final n = p.name.toLowerCase();
-    if (n.contains('netflix')) return 'netflix://app';
-    if (n.contains('disney')) return 'disneyplus://';
-    if (n.contains('hbo') || n == 'max') return 'hbomax://';
-    if (n.contains('hulu')) return 'hulu://';
-    if (n.contains('prime') || n.contains('amazon')) return 'primevideo://';
-    if (n.contains('apple tv')) return 'tv://'; // may open Apple TV app on iOS
-    if (n.contains('paramount')) return 'paramountplus://';
-    if (n.contains('peacock')) return 'peacock://';
-    if (n.contains('viaplay')) return 'viaplay://';
-    if (n.contains('viafree')) return 'viafree://';
-    if (n.contains('svt')) return 'svtplay://';
-    if (n.contains('cmore')) return 'cmore://';
-    if (n.contains('discovery+') || n.contains('discovery plus'))
-      return 'dplusapp://';
-    // Add more as you encounter them.
-    return null;
-    // Note: On Android you may want to use package names + Android intent URLs for better results.
-  }
-
-  String? _webForProvider(WatchProvider p) {
-    final n = p.name.toLowerCase();
-    if (n.contains('netflix')) return 'https://www.netflix.com/';
-    if (n.contains('disney')) return 'https://www.disneyplus.com/';
-    if (n.contains('hbo') || n == 'max') return 'https://play.max.com/';
-    if (n.contains('hulu')) return 'https://www.hulu.com/';
-    if (n.contains('prime') || n.contains('amazon'))
-      return 'https://www.primevideo.com/';
-    if (n.contains('apple tv')) return 'https://tv.apple.com/';
-    if (n.contains('paramount')) return 'https://www.paramountplus.com/';
-    if (n.contains('peacock')) return 'https://www.peacocktv.com/';
-    if (n.contains('viaplay')) return 'https://viaplay.com/';
-    if (n.contains('svt')) return 'https://www.svtplay.se/';
-    if (n.contains('cmore')) return 'https://www.cmore.se/';
-    if (n.contains('discovery+') || n.contains('discovery plus'))
-      return 'https://www.discoveryplus.com/';
-    return null;
-  }
-
+  // -------- UI --------
   @override
   Widget build(BuildContext context) {
     final s = show;
 
-    final watchedCount = s?.watchedCount ?? 0;
     final total = s?.totalEpisodes ?? 0;
-    final pct = (total > 0) ? ((s!.progress * 100).round()) : 0;
+    final pct = (total > 0 && s != null) ? ((s.progress * 100).round()) : 0;
 
     return Scaffold(
       appBar: AppBar(title: Text(s?.title ?? 'Details'), centerTitle: true),
-      body: loading || s == null
+      body: loadingCore && s == null
           ? const Center(child: CircularProgressIndicator())
-          : SafeArea(
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              edgeOffset: 0,
               child: ListView(
                 padding: EdgeInsets.zero,
                 children: [
-                  // Poster-left + right backdrop with left fade
+                  // ======= HERO =======
                   SizedBox(
-                    height: 260,
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: backdropUrl != null
-                              ? Image.network(backdropUrl!, fit: BoxFit.cover)
-                              : const SizedBox.shrink(),
-                        ),
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.centerRight,
-                                  end: Alignment.centerLeft,
-                                  colors: [
-                                    Colors.black.withValues(alpha: 0.0),
-                                    Colors.black.withValues(alpha: 0.0),
-                                    Colors.black.withValues(alpha: 0.7),
-                                    Colors.black.withValues(alpha: 0.95),
-                                  ],
-                                  stops: const [0.0, 0.4, 0.75, 1.0],
+                    height: _bannerH,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final double screenW = constraints.maxWidth;
+                        final double posterCenterX = _hPad + (_posterW / 2);
+                        final double rightPad = _hPad;
+                        final double artLeft = posterCenterX;
+                        final double artRight = rightPad;
+
+                        return Stack(
+                          children: [
+                            // Solid side panels
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              left: 0,
+                              width: artLeft.clamp(0.0, screenW),
+                              child: ColoredBox(color: _edgeColor),
+                            ),
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              right: 0,
+                              width: artRight.clamp(0.0, screenW),
+                              child: ColoredBox(color: _edgeColor),
+                            ),
+
+                            // Artwork
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              left: artLeft,
+                              right: artRight,
+                              child: backdropUrl != null
+                                  ? Center(
+                                      child: CachedNetworkImage(
+                                        imageUrl: backdropUrl!,
+                                        height: _bannerH,
+                                        fit: BoxFit.fitHeight,
+                                        fadeInDuration: const Duration(
+                                          milliseconds: 120,
+                                        ),
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
+                            ),
+
+                            // Inner fades (use withValues to avoid deprecation)
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              left: artLeft,
+                              width: _fadeIntoArtwork,
+                              child: IgnorePointer(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.centerLeft,
+                                      end: Alignment.centerRight,
+                                      colors: [
+                                        _edgeColor,
+                                        _edgeColor.withValues(alpha: 0.7),
+                                        _edgeColor.withValues(alpha: 0.35),
+                                        _edgeColor.withValues(alpha: 0.0),
+                                      ],
+                                      stops: const [0.0, 0.35, 0.7, 1.0],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16.0,
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: s.posterUrl != null
-                                  ? Image.network(
-                                      s.posterUrl!,
-                                      width: 150,
-                                      height: 220,
-                                      fit: BoxFit.cover,
-                                    )
-                                  : Container(
-                                      width: 150,
-                                      height: 220,
-                                      alignment: Alignment.center,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white10,
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Icon(Icons.tv),
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              right: artRight,
+                              width: _fadeIntoArtwork,
+                              child: IgnorePointer(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.centerRight,
+                                      end: Alignment.centerLeft,
+                                      colors: [
+                                        _edgeColor,
+                                        _edgeColor.withValues(alpha: 0.7),
+                                        _edgeColor.withValues(alpha: 0.35),
+                                        _edgeColor.withValues(alpha: 0.0),
+                                      ],
+                                      stops: const [0.0, 0.35, 0.7, 1.0],
                                     ),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
+
+                            // Poster
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: _hPad,
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: s?.posterUrl != null
+                                      ? CachedNetworkImage(
+                                          imageUrl: s!.posterUrl!,
+                                          width: _posterW,
+                                          height: _posterH,
+                                          fit: BoxFit.cover,
+                                          fadeInDuration: const Duration(
+                                            milliseconds: 120,
+                                          ),
+                                          placeholder: (_, __) =>
+                                              Container(color: Colors.white12),
+                                          errorWidget: (_, __, ___) =>
+                                              const Icon(Icons.tv),
+                                        )
+                                      : Container(
+                                          width: _posterW,
+                                          height: _posterH,
+                                          alignment: Alignment.center,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white10,
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: const Icon(Icons.tv),
+                                        ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
 
-                  // ======= Content =======
+                  // ======= CONTENT =======
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    padding: const EdgeInsets.symmetric(horizontal: _hPad),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SizedBox(height: 8),
 
-                        if (s.totalEpisodes > 0) ...[
+                        if (s != null && s.totalEpisodes > 0) ...[
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(value: s.progress),
@@ -351,7 +484,7 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
                           const SizedBox(height: 6),
                           Center(
                             child: Text(
-                              'Watched $watchedCount / $total  ($pct%)',
+                              'Watched ${s.watchedCount} / ${s.totalEpisodes}  ($pct%)',
                               style: const TextStyle(color: Colors.white70),
                             ),
                           ),
@@ -380,7 +513,7 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  s.title,
+                                  s?.title ?? '',
                                   style: const TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.bold,
@@ -425,7 +558,6 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
                             ),
                             const SizedBox(height: 10),
                           ],
-
                           if (rents.isNotEmpty) ...[
                             const Text(
                               'Rent',
@@ -442,7 +574,6 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
                             ),
                             const SizedBox(height: 10),
                           ],
-
                           if (buys.isNotEmpty) ...[
                             const Text(
                               'Buy',
@@ -464,101 +595,137 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
                         Divider(color: Colors.white.withValues(alpha: 0.12)),
                         const SizedBox(height: 8),
 
+                        // Actions
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            IconButton(
-                              tooltip: s.allWatched
-                                  ? 'Unmark entire show'
-                                  : 'Mark entire show as watched',
-                              iconSize: 28,
-                              onPressed: _toggleShowWatched,
-                              icon: Icon(
-                                s.allWatched
-                                    ? Icons.check_circle
-                                    : Icons.check_circle_outlined,
-                                color: s.allWatched
-                                    ? Colors.greenAccent
-                                    : Colors.white70,
+                            InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: _toggleShowWatched,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
+                                ),
+                                child: Icon(
+                                  s?.allWatched == true
+                                      ? Icons.check_circle
+                                      : Icons.check_circle_outlined,
+                                  size: 28,
+                                  color: s?.allWatched == true
+                                      ? Colors.greenAccent
+                                      : Colors.white70,
+                                ),
                               ),
                             ),
                             const SizedBox(width: 24),
-                            IconButton(
-                              tooltip: s.isWatchlisted
-                                  ? 'Remove from watchlist'
-                                  : 'Add to watchlist',
-                              iconSize: 28,
-                              onPressed: _toggleWatchlist,
-                              icon: Icon(
-                                s.isWatchlisted
-                                    ? Icons.bookmark
-                                    : Icons.bookmark_outline,
-                                color: s.isWatchlisted
-                                    ? Colors.amber
-                                    : Colors.white70,
+                            InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: _toggleWatchlist,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
+                                ),
+                                child: Icon(
+                                  s?.isWatchlisted == true
+                                      ? Icons.bookmark
+                                      : Icons.bookmark_outline,
+                                  size: 28,
+                                  color: s?.isWatchlisted == true
+                                      ? Colors.amber
+                                      : Colors.white70,
+                                ),
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 8),
 
-                        ...s.seasons.map((season) {
-                          final seasonAllWatched =
-                              season.episodes.isNotEmpty &&
-                              season.episodes.every((e) => e.watched);
-                          return ExpansionTile(
-                            tilePadding: EdgeInsets.zero,
-                            title: Row(
-                              children: [
-                                Text(
-                                  'Season ${season.number}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                InkWell(
-                                  onTap: () => _toggleSeason(
-                                    season.number,
-                                    !seasonAllWatched,
-                                  ),
-                                  borderRadius: BorderRadius.circular(999),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(4.0),
-                                    child: Icon(
-                                      seasonAllWatched
-                                          ? Icons.check_circle
-                                          : Icons.check_circle_outline,
-                                      size: 20,
-                                      color: seasonAllWatched
-                                          ? Colors.greenAccent
-                                          : Colors.white60,
+                        // Seasons (simple ExpansionTiles)
+                        if (!loadingSeasons &&
+                            s != null &&
+                            s.seasons.isNotEmpty)
+                          ...s.seasons.map((season) {
+                            final seasonAllWatched =
+                                season.episodes.isNotEmpty &&
+                                season.episodes.every((e) => e.watched);
+                            return ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              title: Row(
+                                children: [
+                                  Text(
+                                    'Season ${season.number}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  InkWell(
+                                    onTap: () => _toggleSeason(
+                                      season.number,
+                                      !seasonAllWatched,
+                                    ),
+                                    borderRadius: BorderRadius.circular(999),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(4.0),
+                                      child: Icon(
+                                        seasonAllWatched
+                                            ? Icons.check_circle
+                                            : Icons.check_circle_outline,
+                                        size: 20,
+                                        color: seasonAllWatched
+                                            ? Colors.greenAccent
+                                            : Colors.white60,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              children: season.episodes.map((ep) {
+                                return CheckboxListTile(
+                                  value: ep.watched,
+                                  dense: true,
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  contentPadding: EdgeInsets.zero,
+                                  onChanged: (v) => _toggleEpisode(
+                                    season.number,
+                                    ep.number,
+                                    v ?? false,
+                                  ),
+                                  title: Text(
+                                    'Ep ${ep.number}. ${ep.title}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                );
+                              }).toList(),
+                            );
+                          }),
+
+                        if (loadingSeasons)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 24.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                                SizedBox(width: 10),
+                                Text(
+                                  'Loading seasons…',
+                                  style: TextStyle(color: Colors.white70),
                                 ),
                               ],
                             ),
-                            children: season.episodes.map((ep) {
-                              return CheckboxListTile(
-                                value: ep.watched,
-                                dense: true,
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                contentPadding: EdgeInsets.zero,
-                                onChanged: (v) => _toggleEpisode(
-                                  season.number,
-                                  ep.number,
-                                  v ?? false,
-                                ),
-                                title: Text(
-                                  'Ep ${ep.number}. ${ep.title}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              );
-                            }).toList(),
-                          );
-                        }),
+                          ),
+
                         const SizedBox(height: 32),
                       ],
                     ),
@@ -569,7 +736,7 @@ class _ShowDetailPageState extends State<ShowDetailPage> {
     );
   }
 
-  Widget _logoChip(WatchProvider p) {
+  Widget _logoChip(models.WatchProvider p) {
     return InkWell(
       onTap: () => _openProvider(p),
       borderRadius: BorderRadius.circular(6),
